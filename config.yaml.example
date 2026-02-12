@@ -1,0 +1,27 @@
+# Hall Monitor Configuration
+# Copy this file to config.yaml and update with your settings
+
+# Path to repos.json (service -> Quay repository mappings)
+repos_config: repos.json
+
+# Directory containing local git repositories to update
+git_repos_dir: "/path/to/your/git/repos"
+
+# Git branch to checkout and update (default: security-compliance)
+branch: security-compliance
+
+# Number of days to look back for recent images in quick search
+quick_search_days: 14
+
+# Optional: Specific services to process (leave empty to process all)
+# If specified, only these services will be checked and updated
+# services:
+#   - chrome-service
+#   - advisor-backend
+services: []
+
+# Dry run mode (preview changes without making modifications)
+dry_run: false
+
+# Path fed to parse_repos.py, made for the konflux references markdown from the in-boundary wiki
+markdown_path: "/path/to/your/wiki/technology/Konflux-service-references.md"
