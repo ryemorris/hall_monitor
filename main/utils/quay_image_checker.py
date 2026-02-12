@@ -118,50 +118,6 @@ def is_sc_tag_in_range(tag_name: str, start_date: Optional[str], end_date: Optio
     return True, date_str
 
 
-# def search_by_service_sha_map(repos: Dict[str, str], sha_map: Dict[str, str]):
-#     """Search each service's repository for its specific SHA."""
-#     found_any = False
-#     total_services = len(sha_map)
-#     current = 0
-#
-#     for service, sha in sha_map.items():
-#         current += 1
-#         if service not in repos:
-#             print(f"\n[{current}/{total_services}] Skipping {service}: Not found in repo config", file=sys.stderr)
-#             continue
-#
-#         if len(sha) != 7:
-#             print(f"\n[{current}/{total_services}] Warning: SHA for {service} should be 7 characters (got: {sha})", file=sys.stderr)
-#
-#         repo_url = repos[service]
-#
-#         try:
-#             namespace, repository = parse_quay_repo(repo_url)
-#         except ValueError as e:
-#             print(f"\n[{current}/{total_services}] Skipping {service}: {e}", file=sys.stderr)
-#             continue
-#
-#         print(f"\n[{current}/{total_services}] Searching {service} for SHA {sha} ({namespace}/{repository})...")
-#         tags = get_all_tags(namespace, repository)
-#
-#         if not tags:
-#             print(f"  No tags found or error accessing repository")
-#             continue
-#
-#         matches = [tag for tag in tags if is_sha_tag(tag['name'], sha)]
-#
-#         if matches:
-#             found_any = True
-#             print(f"  ✓ Found {len(matches)} match(es):")
-#             for tag in matches:
-#                 manifest_digest = tag.get('manifest_digest', 'N/A')
-#                 print(f"    - {tag['name']} (digest: {manifest_digest[:19]}...)")
-#         else:
-#             print(f"  ✗ No matches found")
-#
-#     return found_any
-
-
 def search_by_date_range(repos: Dict[str, str], start_date: Optional[str], end_date: Optional[str],
                          services: Optional[List[str]] = None, report_mode: bool = False):
     """
@@ -291,12 +247,6 @@ Examples:
         help='Quick mode: Search all repos for images from the last 14 days and generate a report'
     )
 
-    # parser.add_argument(
-    #     '--deep',
-    #     metavar='SHA_MAP_FILE',
-    #     help='Deep mode: JSON file mapping service names to SHAs (e.g., {"service1": "abc1234"})'
-    # )
-
     parser.add_argument(
         '--services',
         nargs='+',
@@ -311,11 +261,8 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate mode selection
-    # if args.quick and args.deep:
-    #     parser.error("Cannot use both --quick and --deep modes")
-
-    if not args.quick:  # and not args.deep:
+    
+    if not args.quick:
         parser.error("Must specify --quick mode")
 
     # Load repository configuration
@@ -348,25 +295,6 @@ Examples:
             except Exception as e:
                 print(f"Error writing to file: {e}", file=sys.stderr)
                 sys.exit(1)
-
-    # # Handle deep mode
-    # elif args.deep:
-    #     # Load SHA mappings
-    #     sha_map = load_repo_config(args.deep)
-    #
-    #     if not sha_map:
-    #         print("Error: No SHA mappings found in file", file=sys.stderr)
-    #         sys.exit(1)
-    #
-    #     # Filter by services if specified
-    #     if args.services:
-    #         sha_map = {k: v for k, v in sha_map.items() if k in args.services}
-    #         if not sha_map:
-    #             print("Error: None of the specified services found in SHA mapping file", file=sys.stderr)
-    #             sys.exit(1)
-    #
-    #     print(f"Deep mode: Searching {len(sha_map)} service(s) for their specific SHAs\n")
-    #     found = search_by_service_sha_map(repos, sha_map)
 
     if not found:
         print("\nNo matching images found.")

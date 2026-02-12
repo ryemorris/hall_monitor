@@ -1,0 +1,33 @@
+# Python
+**/*__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+venv/
+env/
+ENV/
+
+# Configuration (keep examples, ignore actual configs with secrets/paths)
+config.yaml
+repos.json
+
+# Output files
+stale_services.txt
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
