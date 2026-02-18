@@ -23,5 +23,9 @@ services: []
 # Dry run mode (preview changes without making modifications)
 dry_run: false
 
+# Skip triggering component builds for unremedied services (Step 3)
+# Set to true if you want to skip the `oc annotate` step
+skip_build_trigger: false
+
 # Path fed to parse_repos.py, made for the konflux references markdown from the in-boundary wiki
 markdown_path: "/path/to/your/wiki/technology/Konflux-service-references.md"

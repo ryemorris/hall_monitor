@@ -4,9 +4,10 @@ Automated workflow for monitoring Quay.io repositories and updating Tekton SC pi
 
 ## Overview
 
-Hall Monitor coordinates two operations:
+Hall Monitor coordinates three operations:
 1. **Check Quay repositories** for stale services (no recent container images)
 2. **Update Tekton SC files** in those stale service repositories
+3. **Trigger component builds** for unremedied stale services (optional)
 
 ## Installation
 
@@ -28,11 +29,12 @@ cp config.yaml.example config.yaml
 ```
 hall_monitor/
 ├── main/
-│   ├── coordinator.py           # Main orchestration script
+│   ├── coordinator.py              # Main orchestration script
 │   └── utils/
-│       ├── quay_image_checker.py  # Quay repository monitoring
-│       ├── update_tekton_sc.py    # Tekton pipeline updater
-│       └── parse_repos.py         # Utility to generate repos.json
+│       ├── quay_image_checker.py      # Quay repository monitoring
+│       ├── update_tekton_sc.py        # Tekton pipeline updater
+│       ├── trigger_component_builds.py # Konflux component build trigger
+│       └── parse_repos.py             # Utility to generate repos.json
 ├── config.yaml.example          # Configuration template
 ├── repos.json                   # Service to Quay repository mappings
 ├── requirements.txt             # Python dependencies
@@ -57,14 +59,17 @@ dry_run: false
 ### 2. Run
 
 ```bash
-# Full workflow (check Quay + update repos)
+# Full workflow (check Quay + update repos + trigger builds)
 python -m main.coordinator
 
 # Dry run (preview changes)
 python -m main.coordinator --dry-run
 
-# Check only (don't update repos)
+# Check only (don't update repos or trigger builds)
 python -m main.coordinator --check-only
+
+# Skip build triggering (Steps 1 and 2 only)
+python -m main.coordinator --skip-build-trigger
 
 # Process specific services
 python -m main.coordinator --services chrome-service advisor-backend
@@ -86,19 +91,27 @@ For each stale service:
 - Updates `.tekton/*-sc*.yaml` files to use `main` branch instead of version tags
 - Commits and pushes changes
 
-### Step 3: Report Unremedied Stale Services
-After the update process, the tool logs any stale services where no changes were made. This is critical because it indicates the stale status persists and the Tekton SC update didn't resolve the underlying issue. The log shows:
+The tool tracks any stale services where no changes were made, which indicates the stale status persists:
 - Services where the target branch doesn't exist
 - Services with no SC files in the `.tekton` directory
 - Services where SC files already use the `main` branch (most common case)
 
+### Step 3: Trigger Component Builds (Optional)
+For unremedied stale services (those where Step 2 made no changes):
+- Parses `repos.json` to extract tenant namespace and component name from Quay URLs
+- Uses `oc` command to annotate components with `build.appstudio.openshift.io/request=trigger-pac-build`
+- Triggers post-merge PAC builds to generate fresh container images
+
+This step can be skipped with `--skip-build-trigger` or by setting `skip_build_trigger: true` in config.
+
 ## Command Line Options
 
 ```
---config CONFIG        Path to config file (default: config.yaml)
---dry-run              Preview changes without making modifications
---services SERVICE...  Process only specific services
---check-only           Only check for stale services, skip updates
+--config CONFIG           Path to config file (default: config.yaml)
+--dry-run                 Preview changes without making modifications
+--services SERVICE...     Process only specific services
+--check-only              Only check for stale services, skip updates and build triggers
+--skip-build-trigger      Skip triggering component builds (Steps 1 and 2 only)
 ```
 
 ## Configuration File
@@ -111,6 +124,7 @@ After the update process, the tool logs any stale services where no changes were
 | `quick_search_days` | int | 14 | Days to look back for recent images |
 | `services` | list | [] | Specific services to process (empty = all) |
 | `dry_run` | bool | false | Preview mode (no changes made) |
+| `skip_build_trigger` | bool | false | Skip component build triggering (Step 3) |
 
 ## Individual Tools
 
@@ -137,6 +151,22 @@ python -m main.utils.update_tekton_sc /path/to/repos --repos service1 service2 -
 # Update all repos in directory
 python -m main.utils.update_tekton_sc /path/to/repos --branch security-compliance
 ```
+
+### Component Build Trigger
+
+Trigger Konflux component builds by annotating components:
+
+```bash
+python -m main.utils.trigger_component_builds --repos-config repos.json --services service1 service2
+
+# Dry run
+python -m main.utils.trigger_component_builds --repos-config repos.json --services service1 --dry-run
+
+# Read services from file
+python -m main.utils.trigger_component_builds --repos-config repos.json --services-file stale_services.txt
+```
+
+**Requirements:** Requires `oc` CLI to be installed and authenticated to the Konflux cluster.
 
 ## Setup
 
@@ -176,17 +206,29 @@ Your local git repositories must have:
 - PyYAML: `pip install pyyaml`
 - Git repositories with `upstream` remote configured
 - Quay repositories must be public
+- OpenShift CLI (`oc`) - required only for Step 3 (component build triggering)
+  - Must be authenticated to the Konflux cluster
 
 ## Examples
 
-**Daily stale service check and update:**
+**Daily stale service check, update, and trigger builds:**
 ```bash
 python -m main.coordinator
 ```
 
 **Test workflow before running:**
 ```bash
-python -m main.coordinator --dry-run --check-only
+python -m main.coordinator --dry-run
+```
+
+**Only check for stale services (no updates or build triggers):**
+```bash
+python -m main.coordinator --check-only
+```
+
+**Update Tekton files but skip build triggering:**
+```bash
+python -m main.coordinator --skip-build-trigger
 ```
 
 **Emergency update specific services:**
@@ -198,7 +240,7 @@ python -m main.coordinator --services critical-service1 critical-service2
 
 ## Output and Logging
 
-When stale services are processed but not remedied by the update, you'll see a warning report:
+When stale services are processed but not remedied by the update (Step 2), you'll see a warning report:
 
 ```
 ============================================================
@@ -219,7 +261,29 @@ Total: 3 service(s) require investigation
 ============================================================
 ```
 
-These services require further investigation to determine why they're stale despite having correct Tekton configurations.
+If Step 3 is enabled (default), these unremedied services will then have their Konflux components annotated to trigger fresh builds:
+
+```
+============================================================
+STEP 3: Triggering component builds for 3 unremedied service(s)
+============================================================
+
+Processing: service-name-1
+  Quay URL: quay.io/redhat-services-prod/tenant/app/component-sc
+  Namespace: tenant
+  Component: component-sc
+  ✓ Annotated: component-sc in tenant
+...
+============================================================
+BUILD TRIGGER SUMMARY
+============================================================
+
+✓ Successfully triggered: 3
+  - service-name-1
+  - service-name-2
+  - service-name-3
+============================================================
+```
 
 ## Image Pattern
 
