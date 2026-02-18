@@ -5,6 +5,7 @@ Hall Monitor Coordinator
 Orchestrates the workflow:
 1. Check Quay repositories for stale services (no recent images)
 2. Update Tekton SC files in those stale service repositories
+3. Trigger component builds for unremedied stale services (optional)
 """
 
 import argparse
@@ -18,6 +19,7 @@ import yaml
 # Import from our local modules
 from main.utils.quay_image_checker import load_repo_config, search_by_date_range
 from main.utils.update_tekton_sc import TektonUpdater
+from main.utils.trigger_component_builds import ComponentBuildTrigger
 
 
 def load_config(config_path: str) -> dict:
@@ -79,20 +81,92 @@ def map_service_to_repo(service_name: str) -> str:
     return service_to_repo.get(service_name, service_name)
 
 
+def get_unremedied_services(stale_services: List[str], updater: TektonUpdater) -> List[str]:
+    """
+    Get list of stale services that were not remedied by Tekton updates.
+
+    Args:
+        stale_services: Original list of stale services
+        updater: TektonUpdater instance after running updates
+
+    Returns:
+        List of service names that remain unremedied
+    """
+    # Get repos that had no changes from the updater
+    unremedied_repos = {repo_name for repo_name, _ in updater.no_changes_log}
+
+    # Find services that map to those repos
+    unremedied_services = []
+    for service in stale_services:
+        repo = map_service_to_repo(service)
+        if repo in unremedied_repos:
+            unremedied_services.append(service)
+
+    return unremedied_services
+
+
+def trigger_component_builds(
+    unremedied_services: List[str],
+    repos: dict,
+    dry_run: bool = False
+) -> None:
+    """
+    Trigger Konflux component builds for unremedied stale services.
+
+    Args:
+        unremedied_services: List of service names that remain stale
+        repos: Repository configuration (service -> Quay URL mappings)
+        dry_run: If True, preview what would be done without making changes
+    """
+    if not unremedied_services:
+        print("\n" + "=" * 80)
+        print("No unremedied services to trigger builds for!")
+        print("=" * 80)
+        return
+
+    print("\n" + "=" * 80)
+    print(f"STEP 3: Triggering component builds for {len(unremedied_services)} unremedied service(s)")
+    print("=" * 80)
+    if dry_run:
+        print("Mode: DRY RUN")
+    print()
+
+    # Create trigger instance
+    trigger = ComponentBuildTrigger(
+        repos_config=repos,
+        dry_run=dry_run
+    )
+
+    # Check if oc is available
+    if not trigger.check_oc_available():
+        print("Warning: 'oc' command not found or not configured", file=sys.stderr)
+        print("Skipping component build triggers. Please ensure you have the OpenShift CLI installed and are logged in.", file=sys.stderr)
+        return
+
+    # Trigger builds
+    results = trigger.trigger_builds_for_services(unremedied_services)
+
+    # Print summary
+    trigger.print_summary(results)
+
+
 def update_stale_repos(
     stale_services: List[str],
     git_repos_dir: str,
     branch: str = "security-compliance",
     dry_run: bool = False
-) -> None:
+) -> Optional[TektonUpdater]:
     """
     Update Tekton SC files in stale service repositories.
+
+    Returns:
+        TektonUpdater instance (so we can access no_changes_log), or None if no services to update
     """
     if not stale_services:
         print("\n" + "=" * 80)
         print("No stale services to update!")
         print("=" * 80)
-        return
+        return None
 
     print("\n" + "=" * 80)
     print(f"STEP 2: Updating Tekton SC files in {len(stale_services)} stale service(s)")
@@ -121,6 +195,8 @@ def update_stale_repos(
     # Run the update process
     updater.run()
 
+    return updater
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -128,7 +204,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run with default config file
+  # Full workflow (check + update + trigger builds)
   python -m main.coordinator
 
   # Use specific config file
@@ -142,6 +218,9 @@ Examples:
 
   # Skip the update step, only check for stale services
   python -m main.coordinator --check-only
+
+  # Skip build triggering (run Steps 1 and 2 only)
+  python -m main.coordinator --skip-build-trigger
         """
     )
 
@@ -169,6 +248,12 @@ Examples:
         help='Only check for stale services, do not update repositories'
     )
 
+    parser.add_argument(
+        '--skip-build-trigger',
+        action='store_true',
+        help='Skip triggering component builds for unremedied services (Step 3)'
+    )
+
     args = parser.parse_args()
 
     # Load configuration
@@ -177,6 +262,7 @@ Examples:
     # Override config with command line arguments
     dry_run = args.dry_run or config.get('dry_run', False)
     services = args.services or config.get('services') or None
+    skip_build_trigger = args.skip_build_trigger or config.get('skip_build_trigger', False)
 
     # Load repository configuration
     repos_config_path = config.get('repos_config', 'repos.json')
@@ -203,18 +289,25 @@ Examples:
         sys.exit(0)
 
     # Step 2: Update stale repositories
+    updater = None
     if stale_services:
         git_repos_dir = config.get('git_repos_dir')
         if not git_repos_dir:
             print("\nError: git_repos_dir not configured in config file", file=sys.stderr)
             sys.exit(1)
 
-        update_stale_repos(
+        updater = update_stale_repos(
             stale_services,
             git_repos_dir,
             config.get('branch', 'security-compliance'),
             dry_run
         )
+
+    # Step 3: Trigger builds for unremedied services (if enabled)
+    if not skip_build_trigger and updater and updater.no_changes_log:
+        unremedied_services = get_unremedied_services(stale_services, updater)
+        if unremedied_services:
+            trigger_component_builds(unremedied_services, repos, dry_run)
 
     print("\n" + "=" * 80)
     print("WORKFLOW COMPLETE")
